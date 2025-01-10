@@ -1,6 +1,8 @@
 package godm
 
 import (
+	"errors"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,13 +21,12 @@ func ParseOPM(s string) (*OPM, error) {
 		}
 	}
 
+	// Parse header, Table 3-1
 	foundMessageId := false
 	// see if message contains MESSAGE_ID
 	if strings.Contains(result.Raw, "MESSAGE_ID") {
 		foundMessageId = true
 	}
-
-	// Parse header, Table 3-1
 	header := OPMHeader{}
 	i := 0
 	for {
@@ -117,7 +118,154 @@ func ParseOPM(s string) (*OPM, error) {
 
 	result.MetaData = metaData
 
+	// Parse data, Table 3-3
+	// State Vector
+	stateVector := StateVector{}
+	for {
+		line := lines[i]
+		i++
+
+		if line == "" {
+			continue
+		}
+
+		k, v, err := parseLine(line)
+		if err != nil {
+			return nil, err
+		}
+
+		foundZdot := false
+		switch k {
+		case "COMMENT":
+			stateVector.Comments = append(stateVector.Comments, v)
+		case "EPOCH":
+			if !strings.Contains(v, "Z") {
+				v += "Z"
+			}
+			stateVector.Epoch, err = time.Parse(time.RFC3339, v)
+			if err != nil {
+				return nil, err
+			}
+		case "X":
+			stateVector.X, err = parseFloat(v)
+			if err != nil {
+				return nil, err
+			}
+		case "Y":
+			stateVector.Y, err = parseFloat(v)
+			if err != nil {
+				return nil, err
+			}
+		case "Z":
+			stateVector.Z, err = parseFloat(v)
+			if err != nil {
+				return nil, err
+			}
+		case "X_DOT":
+			stateVector.XDOT, err = parseFloat(v)
+			if err != nil {
+
+				return nil, err
+			}
+		case "Y_DOT":
+			stateVector.YDOT, err = parseFloat(v)
+			if err != nil {
+				return nil, err
+			}
+		case "Z_DOT":
+			stateVector.ZDOT, err = parseFloat(v)
+			if err != nil {
+				return nil, err
+			}
+			foundZdot = true
+		}
+
+		if foundZdot {
+			break
+		}
+	}
+	result.Data.StateVector = stateVector
+
+	// Osculating Keplerian Elements
+	if strings.Contains(result.Raw, "SEMI_MAJOR_AXIS") {
+		kep := OsculatingKeplerianElements{}
+		foundGm := false
+		for {
+			line := lines[i]
+			i++
+
+			if line == "" {
+				continue
+			}
+
+			k, v, err := parseLine(line)
+			if err != nil {
+				return nil, err
+			}
+
+			switch k {
+			case "COMMENT":
+				kep.Comments = append(kep.Comments, v)
+			case "SEMI_MAJOR_AXIS":
+				kep.SemiMajorAxis, err = parseFloat(v)
+				if err != nil {
+					return nil, err
+				}
+			case "ECCENTRICITY":
+				kep.Eccentricity, err = parseFloat(v)
+				if err != nil {
+					return nil, err
+				}
+			case "INCLINATION":
+				kep.Inclination, err = parseFloat(v)
+				if err != nil {
+					return nil, err
+				}
+			case "RA_OF_ASC_NODE":
+				kep.RaOfAscNode, err = parseFloat(v)
+				if err != nil {
+					return nil, err
+				}
+			case "ARG_OF_PERICENTER":
+				kep.ArgOfPericenter, err = parseFloat(v)
+				if err != nil {
+					return nil, err
+				}
+			case "TRUE_ANOMALY":
+				kep.TrueAnomaly, err = parseFloat(v)
+				if err != nil {
+					return nil, err
+				}
+			case "MEAN_ANOMALY":
+				kep.MeanAnomaly, err = parseFloat(v)
+				if err != nil {
+					return nil, err
+				}
+			case "GM":
+				kep.GM, err = parseFloat(v)
+				if err != nil {
+					return nil, err
+				}
+				foundGm = true
+			}
+
+			if foundGm {
+				break
+			}
+		}
+
+		if kep.MeanAnomaly != 0 && kep.TrueAnomaly != 0 {
+			return nil, errors.New("either TRUE_ANOMALY or MEAN_ANOMALY must be provided, not both")
+		}
+
+		result.Data.OsculatingKeplerianElements = kep
+	}
+
 	return &result, nil
+}
+
+func parseFloat(s string) (float64, error) {
+	return strconv.ParseFloat(s, 64)
 }
 
 type OPM struct {
@@ -192,7 +340,7 @@ type OPMData struct {
 
 type StateVector struct {
 	// Optional
-	Comment string `json:"COMMENT" xml:"COMMENT"`
+	Comments []string `json:"COMMENT" xml:"COMMENT"`
 
 	// Mandatory
 	Epoch time.Time `json:"EPOCH" xml:"EPOCH"`
@@ -218,7 +366,7 @@ type StateVector struct {
 
 type OsculatingKeplerianElements struct {
 	// Optional
-	Comment string `json:"COMMENT" xml:"COMMENT"`
+	Comments []string `json:"COMMENT" xml:"COMMENT"`
 
 	// Conditional, none or all, km
 	SemiMajorAxis float64 `json:"SEMI_MAJOR_AXIS" xml:"SEMI_MAJOR_AXIS"`
@@ -245,7 +393,7 @@ type OsculatingKeplerianElements struct {
 
 type SpacecraftParameters struct {
 	// Optional
-	Comment string `json:"COMMENT" xml:"COMMENT"`
+	Comments []string `json:"COMMENT" xml:"COMMENT"`
 
 	// Conditional, required if maneuver specified, kg
 	Mass float64 `json:"MASS" xml:"MASS"`
@@ -265,7 +413,7 @@ type SpacecraftParameters struct {
 
 type CovarianceMatrix struct {
 	// Optional
-	Comment string `json:"COMMENT" xml:"COMMENT"`
+	Comments []string `json:"COMMENT" xml:"COMMENT"`
 
 	// Conditional, may be omitted if same as REF_FRAME
 	CovRefFrame string `json:"COV_REF_FRAME" xml:"COV_REF_FRAME"`
@@ -336,7 +484,7 @@ type CovarianceMatrix struct {
 
 type ManeuverParameters struct {
 	// Optional
-	Comment string `json:"COMMENT" xml:"COMMENT"`
+	Comments []string `json:"COMMENT" xml:"COMMENT"`
 
 	// Optional
 	ManEpochIgnition time.Time `json:"MAN_EPOCH_IGNITION" xml:"MAN_EPOCH_IGNITION"`
