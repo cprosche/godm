@@ -53,20 +53,54 @@ func TestParseLine(t *testing.T) {
 	})
 }
 
-func TestDetectLineEnding(t *testing.T) {
-	t.Run("Detects CRLF", func(t *testing.T) {
-		assert.Equal(t, CRLF, detectLineEnding("a\r\nb\r\nc\r\nd"))
+func TestParseIntoKVs(t *testing.T) {
+	t.Run("Parses basic", func(t *testing.T) {
+		expected := []KV{
+			{"KEY", "VALUE"},
+		}
+		got, err := parseIntoKVs(`KEY=VALUE`)
+		assert.Nil(t, err)
+		assert.Equal(t, expected, got)
 	})
 
-	t.Run("Detects LFCR", func(t *testing.T) {
-		assert.Equal(t, LFCR, detectLineEnding("a\n\rb\n\rc\n\rd"))
+	t.Run("Parses basic with spaces", func(t *testing.T) {
+		expected := []KV{
+			{"KEY", "VALUE"},
+		}
+		got, err := parseIntoKVs(` KEY = VALUE `)
+		assert.Nil(t, err)
+		assert.Equal(t, expected, got)
 	})
 
-	t.Run("Detects CR", func(t *testing.T) {
-		assert.Equal(t, CR, detectLineEnding("a\rb\rc\rd"))
+	t.Run("Parses multiple", func(t *testing.T) {
+		expected := []KV{
+			{"KEY", "VALUE"},
+			{"KEY2", "VALUE2"},
+		}
+		got, err := parseIntoKVs(`KEY=VALUE
+KEY2=VALUE2`)
+		assert.Nil(t, err)
+		assert.Equal(t, expected, got)
 	})
 
-	t.Run("Detects LF", func(t *testing.T) {
-		assert.Equal(t, LF, detectLineEnding("a\nb\nc\nd"))
+	t.Run("Parses with multiple of same line", func(t *testing.T) {
+		expected := []KV{
+			{"KEY", "VALUE"},
+			{"KEY", "VALUE2"},
+		}
+
+		got, err := parseIntoKVs(`KEY=VALUE
+KEY=VALUE2`)
+		assert.Nil(t, err)
+		assert.Equal(t, expected, got)
+	})
+
+	t.Run("Parses COMMENT", func(t *testing.T) {
+		expected := []KV{
+			{"COMMENT", "1996-01-01 00:00:00.000"},
+		}
+		got, err := parseIntoKVs(`COMMENT      1996-01-01 00:00:00.000`)
+		assert.Nil(t, err)
+		assert.Equal(t, expected, got)
 	})
 }
