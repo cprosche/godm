@@ -104,3 +104,13 @@ KEY=VALUE2`)
 		assert.Equal(t, expected, got)
 	})
 }
+
+func TestGetODMFields(t *testing.T) {
+	test := OPM{}
+	fields, err := getODMFields(&test)
+	assert.Nil(t, err)
+	assert.Equal(t, "CCSDS_OPM_VERS", fields[0].Name)
+
+	fields[0].ReflectVal.SetString("1.0")
+	assert.Equal(t, "1.0", test.Header.CcsdsOpmVers)
+}

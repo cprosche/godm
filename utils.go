@@ -36,10 +36,11 @@ type KV struct {
 func parseIntoKVs(raw string) ([]KV, error) {
 	var (
 		kvs        = []KV{}
+		trimmed    = strings.TrimSpace(raw)
 		lineEnding = detectLineEnding(raw)
 	)
 
-	lines := strings.Split(raw, lineEnding)
+	lines := strings.Split(trimmed, lineEnding)
 	for _, line := range lines {
 		// skip empty lines
 		if line == "" {
