@@ -1,12 +1,11 @@
 package godm
 
 import (
-	"fmt"
-	"reflect"
 	"strings"
 	"time"
 )
 
+// TODO: json & xml support
 func ParseOPM(s string) (OPM, error) {
 	result := OPM{}
 	kvs, err := parseIntoKVs(s)
@@ -14,6 +13,7 @@ func ParseOPM(s string) (OPM, error) {
 		return OPM{}, err
 	}
 
+	// handle user defined parameters
 	for _, kv := range kvs {
 		if strings.HasPrefix(kv.Key, "USER_DEFINED_") {
 			if result.Data.UserDefinedParameters == nil {
@@ -28,135 +28,18 @@ func ParseOPM(s string) (OPM, error) {
 		return OPM{}, err
 	}
 
-	kvIndex := 0
-	for _, f := range fields {
-		if kvIndex >= len(kvs) {
-			if f.Required {
-				return OPM{}, fmt.Errorf("expected key %s, got none, more fields than KVs", f.Name)
-			}
-			continue
-		}
-
-		kv := kvs[kvIndex]
-		if f.Name != kv.Key && f.Required {
-			return OPM{}, fmt.Errorf("expected key %s, got %s", f.Name, kv.Key)
-		}
-
-		if f.ReflectVal.Kind() == reflect.Slice && f.ReflectVal.Type().Elem().Kind() == reflect.Struct {
-		outer:
-			for {
-				instance := reflect.New(f.ReflectVal.Type().Elem()).Interface()
-				subFields, err := getODMFields(instance)
-				if err != nil {
-					return OPM{}, err
-				}
-
-			inner:
-				for _, subField := range subFields {
-					if kvIndex >= len(kvs) {
-						break outer
-					}
-					localKv := kvs[kvIndex]
-
-					if subField.Name != localKv.Key && subField.Name != "COMMENT" {
-						break outer
-					}
-
-					if subField.Name != localKv.Key {
-						continue inner
-					}
-
-					switch subField.ReflectVal.Kind() {
-					case reflect.String:
-						subField.ReflectVal.SetString(localKv.Value)
-						kvIndex++
-					case reflect.Float64:
-						n, err := parseFloat(localKv.Value)
-						if err != nil {
-							return OPM{}, err
-						}
-						subField.ReflectVal.SetFloat(n)
-						kvIndex++
-					case reflect.Struct:
-						if subField.ReflectVal.Type().Name() == "Time" {
-							t, err := parseTime(localKv.Value)
-							if err != nil {
-								return OPM{}, err
-							}
-							subField.ReflectVal.Set(reflect.ValueOf(t))
-							kvIndex++
-						}
-					case reflect.Slice:
-						for kvs[kvIndex].Key == subField.Name {
-							subField.ReflectVal.Set(reflect.Append(subField.ReflectVal, reflect.ValueOf(kvs[kvIndex].Value)))
-							kvIndex++
-						}
-					default:
-						return OPM{}, fmt.Errorf("unsupported type %s", subField.ReflectVal.Kind())
-					}
-				}
-
-				f.ReflectVal.Set(reflect.Append(f.ReflectVal, reflect.ValueOf(instance).Elem()))
-			}
-		}
-
-		if f.Name == kv.Key {
-			switch f.ReflectVal.Kind() {
-			case reflect.String:
-				f.ReflectVal.SetString(kv.Value)
-				kvIndex++
-			case reflect.Slice:
-				for kvs[kvIndex].Key == f.Name {
-					f.ReflectVal.Set(reflect.Append(f.ReflectVal, reflect.ValueOf(kvs[kvIndex].Value)))
-					kvIndex++
-				}
-			case reflect.Struct:
-				if f.ReflectVal.Type().Name() == "Time" {
-					t, err := parseTime(kv.Value)
-					if err != nil {
-						return OPM{}, err
-					}
-					f.ReflectVal.Set(reflect.ValueOf(t))
-					kvIndex++
-				}
-			case reflect.Float64:
-				n, err := parseFloat(kv.Value)
-				if err != nil {
-					return OPM{}, err
-				}
-				f.ReflectVal.SetFloat(n)
-				kvIndex++
-			default:
-				return OPM{}, fmt.Errorf("unsupported type %s", f.ReflectVal.Kind())
-			}
-		}
+	err = populateODMFields(fields, kvs)
+	if err != nil {
+		return OPM{}, err
 	}
 
+	// correct comment placement
 	if len(result.Data.CovarianceMatrix.Comments) > 0 && result.Data.CovarianceMatrix.CovRefFrame == "" && len(result.Data.ManeuverParametersList) > 0 {
 		result.Data.ManeuverParametersList[0].Comments = append(result.Data.ManeuverParametersList[0].Comments, result.Data.CovarianceMatrix.Comments...)
 		result.Data.CovarianceMatrix.Comments = nil
 	}
 
 	return result, nil
-}
-
-func parseOdmTag(f reflect.StructField) (string, bool) {
-	tag := f.Tag.Get("odm")
-	if tag == "" {
-		return "", false
-	}
-
-	var (
-		parts    = strings.Split(tag, ",")
-		name     = parts[0]
-		required = false
-	)
-
-	if len(parts) > 1 && parts[1] == "required" {
-		required = true
-	}
-
-	return name, required
 }
 
 type OPM struct {
