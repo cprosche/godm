@@ -14,6 +14,15 @@ func ParseOPM(s string) (OPM, error) {
 		return OPM{}, err
 	}
 
+	for _, kv := range kvs {
+		if strings.HasPrefix(kv.Key, "USER_DEFINED_") {
+			if result.Data.UserDefinedParameters == nil {
+				result.Data.UserDefinedParameters = map[string]string{}
+			}
+			result.Data.UserDefinedParameters[kv.Key] = kv.Value
+		}
+	}
+
 	fields, err := getODMFields(&result)
 	if err != nil {
 		return OPM{}, err
@@ -33,90 +42,102 @@ func ParseOPM(s string) (OPM, error) {
 			return OPM{}, fmt.Errorf("expected key %s, got %s", f.Name, kv.Key)
 		}
 
-		if f.Name == kv.Key {
-			if f.ReflectVal.Type().Name() == "Time" {
-				t, err := parseTime(kv.Value)
+		if f.ReflectVal.Kind() == reflect.Slice && f.ReflectVal.Type().Elem().Kind() == reflect.Struct {
+		outer:
+			for {
+				instance := reflect.New(f.ReflectVal.Type().Elem()).Interface()
+				subFields, err := getODMFields(instance)
 				if err != nil {
 					return OPM{}, err
 				}
-				f.ReflectVal.Set(reflect.ValueOf(t))
-				kvIndex++
-			} else {
-				switch f.ReflectVal.Kind() {
-				case reflect.String:
-					f.ReflectVal.SetString(kv.Value)
-					kvIndex++
-				case reflect.Slice:
-					for kvs[kvIndex].Key == f.Name {
-						f.ReflectVal.Set(reflect.Append(f.ReflectVal, reflect.ValueOf(kvs[kvIndex].Value)))
-						kvIndex++
+
+			inner:
+				for _, subField := range subFields {
+					if kvIndex >= len(kvs) {
+						break outer
 					}
-				case reflect.Float64:
-					n, err := parseFloat(kv.Value)
+					localKv := kvs[kvIndex]
+
+					if subField.Name != localKv.Key && subField.Name != "COMMENT" {
+						break outer
+					}
+
+					if subField.Name != localKv.Key {
+						continue inner
+					}
+
+					switch subField.ReflectVal.Kind() {
+					case reflect.String:
+						subField.ReflectVal.SetString(localKv.Value)
+						kvIndex++
+					case reflect.Float64:
+						n, err := parseFloat(localKv.Value)
+						if err != nil {
+							return OPM{}, err
+						}
+						subField.ReflectVal.SetFloat(n)
+						kvIndex++
+					case reflect.Struct:
+						if subField.ReflectVal.Type().Name() == "Time" {
+							t, err := parseTime(localKv.Value)
+							if err != nil {
+								return OPM{}, err
+							}
+							subField.ReflectVal.Set(reflect.ValueOf(t))
+							kvIndex++
+						}
+					case reflect.Slice:
+						for kvs[kvIndex].Key == subField.Name {
+							subField.ReflectVal.Set(reflect.Append(subField.ReflectVal, reflect.ValueOf(kvs[kvIndex].Value)))
+							kvIndex++
+						}
+					default:
+						return OPM{}, fmt.Errorf("unsupported type %s", subField.ReflectVal.Kind())
+					}
+				}
+
+				f.ReflectVal.Set(reflect.Append(f.ReflectVal, reflect.ValueOf(instance).Elem()))
+			}
+		}
+
+		if f.Name == kv.Key {
+			switch f.ReflectVal.Kind() {
+			case reflect.String:
+				f.ReflectVal.SetString(kv.Value)
+				kvIndex++
+			case reflect.Slice:
+				for kvs[kvIndex].Key == f.Name {
+					f.ReflectVal.Set(reflect.Append(f.ReflectVal, reflect.ValueOf(kvs[kvIndex].Value)))
+					kvIndex++
+				}
+			case reflect.Struct:
+				if f.ReflectVal.Type().Name() == "Time" {
+					t, err := parseTime(kv.Value)
 					if err != nil {
 						return OPM{}, err
 					}
-					f.ReflectVal.SetFloat(n)
+					f.ReflectVal.Set(reflect.ValueOf(t))
 					kvIndex++
-				default:
-					return OPM{}, fmt.Errorf("unsupported type %s", f.ReflectVal.Kind())
 				}
+			case reflect.Float64:
+				n, err := parseFloat(kv.Value)
+				if err != nil {
+					return OPM{}, err
+				}
+				f.ReflectVal.SetFloat(n)
+				kvIndex++
+			default:
+				return OPM{}, fmt.Errorf("unsupported type %s", f.ReflectVal.Kind())
 			}
 		}
+	}
+
+	if len(result.Data.CovarianceMatrix.Comments) > 0 && result.Data.CovarianceMatrix.CovRefFrame == "" && len(result.Data.ManeuverParametersList) > 0 {
+		result.Data.ManeuverParametersList[0].Comments = append(result.Data.ManeuverParametersList[0].Comments, result.Data.CovarianceMatrix.Comments...)
+		result.Data.CovarianceMatrix.Comments = nil
 	}
 
 	return result, nil
-}
-
-type Field struct {
-	Name       string
-	ReflectVal reflect.Value
-	Required   bool
-}
-
-func getODMFields(v interface{}) ([]Field, error) {
-	var (
-		fields = []Field{}
-		val    = reflect.ValueOf(v).Elem()
-	)
-
-	for i := 0; i < val.Type().NumField(); i++ {
-		field := val.Type().Field(i)
-		if field.Type.Name() == "Time" {
-			tag, required := parseOdmTag(field)
-			if tag == "" {
-				continue
-			}
-			fields = append(fields, Field{
-				Name:       tag,
-				ReflectVal: val.Field(i),
-				Required:   required,
-			})
-			continue
-		}
-
-		switch field.Type.Kind() {
-		case reflect.Struct:
-			f := val.Field(i).Addr().Interface()
-			subFields, err := getODMFields(f)
-			if err != nil {
-				return nil, err
-			}
-			fields = append(fields, subFields...)
-		default:
-			tag, required := parseOdmTag(field)
-			if tag == "" {
-				continue
-			}
-			fields = append(fields, Field{
-				Name:       tag,
-				ReflectVal: val.Field(i),
-				Required:   required,
-			})
-		}
-	}
-
-	return fields, nil
 }
 
 func parseOdmTag(f reflect.StructField) (string, bool) {
@@ -165,23 +186,12 @@ type OPMMetaData struct {
 }
 
 type OPMData struct {
-	// Mandatory
-	StateVector StateVector
-
-	// Optional, none or all
+	StateVector                 StateVector                 // Mandatory
 	OsculatingKeplerianElements OsculatingKeplerianElements // TODO: add validation for this
-
-	// Optional, mass required if maneuver specified
-	SpacecraftParameters SpacecraftParameters // TODO: add validation for this
-
-	// // Optional
-	// CovarianceMatrix CovarianceMatrix
-
-	// // Optional, repeats for each maneuver
-	// ManeuverParametersList []ManeuverParameters
-
-	// // Optional, defined in an ICD, key must start with "USER_DEFINED_"
-	// UserDefinedParameters UserDefinedParameters
+	SpacecraftParameters        SpacecraftParameters        // TODO: add validation for this
+	CovarianceMatrix            CovarianceMatrix            // TODO: add validation for this
+	ManeuverParametersList      []ManeuverParameters        // TODO: add validation for this
+	UserDefinedParameters       map[string]string
 }
 
 type StateVector struct {
@@ -252,5 +262,3 @@ type ManeuverParameters struct {
 	ManDV2           float64   `odm:"MAN_DV_2"`
 	ManDV3           float64   `odm:"MAN_DV_3"`
 }
-
-type UserDefinedParameters map[string]string

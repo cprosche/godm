@@ -113,4 +113,13 @@ func TestGetODMFields(t *testing.T) {
 
 	fields[0].ReflectVal.SetString("1.0")
 	assert.Equal(t, "1.0", test.Header.CcsdsOpmVers)
+
+	foundComment := false
+	for _, f := range fields {
+		if f.Name == "COMMENT" {
+			foundComment = true
+			break
+		}
+	}
+	assert.True(t, foundComment, "COMMENT field not found")
 }

@@ -2,6 +2,7 @@ package godm
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -96,4 +97,64 @@ func parseTime(s string) (time.Time, error) {
 		s += "Z"
 	}
 	return time.Parse(time.RFC3339, s)
+}
+
+type Field struct {
+	Name       string
+	ReflectVal reflect.Value
+	Required   bool
+}
+
+func getODMFields(v interface{}) ([]Field, error) {
+	var (
+		fields = []Field{}
+		val    = reflect.ValueOf(v).Elem()
+	)
+
+	for i := 0; i < val.Type().NumField(); i++ {
+		field := val.Type().Field(i)
+		switch field.Type.Kind() {
+		case reflect.Struct:
+			if field.Type.Name() == "Time" {
+				tag, required := parseOdmTag(field)
+				if tag == "" {
+					continue
+				}
+				fields = append(fields, Field{
+					Name:       tag,
+					ReflectVal: val.Field(i),
+					Required:   required,
+				})
+				continue
+			}
+			f := val.Field(i).Addr().Interface()
+			subFields, err := getODMFields(f)
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, subFields...)
+		case reflect.Slice:
+			if field.Type.Elem().Kind() == reflect.Struct {
+				fields = append(fields, Field{
+					Name:       field.Name,
+					ReflectVal: val.Field(i),
+					Required:   false,
+				})
+				break
+			}
+			fallthrough
+		default:
+			tag, required := parseOdmTag(field)
+			if tag == "" {
+				continue
+			}
+			fields = append(fields, Field{
+				Name:       tag,
+				ReflectVal: val.Field(i),
+				Required:   required,
+			})
+		}
+	}
+
+	return fields, nil
 }
