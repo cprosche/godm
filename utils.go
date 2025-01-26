@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 const (
@@ -92,6 +94,28 @@ func parseFloat(s string) (float64, error) {
 
 // TODO: write tests
 func parseTime(s string) (time.Time, error) {
+	//  handle this: 2020-065T16:00:00
+	if len(strings.Split(s, "-")) == 2 {
+		dayOfYear, err := strconv.Atoi(strings.Split(s, "-")[1][:3])
+		if err != nil {
+			return time.Time{}, err
+		}
+		year, err := strconv.Atoi(strings.Split(s, "-")[0])
+		if err != nil {
+			return time.Time{}, err
+		}
+		timePart := strings.Split(s, "T")[1]
+		layout := "2006-002T15:04:05"
+		if strings.Contains(timePart, ".") {
+			layout = "2006-002T15:04:05.999999999"
+		}
+		t, err := time.Parse(layout, fmt.Sprintf("%04d-%03dT%s", year, dayOfYear, timePart))
+		if err != nil {
+			return time.Time{}, err
+		}
+		return t, nil
+	}
+
 	if !strings.Contains(s, "Z") {
 		s += "Z"
 	}
@@ -200,6 +224,13 @@ func populateODMFields(fields []Field, kvs []KV) error {
 					}
 
 					switch subField.ReflectVal.Kind() {
+					case reflect.Int:
+						n, err := strconv.Atoi(localKv.Value)
+						if err != nil {
+							return err
+						}
+						subField.ReflectVal.SetInt(int64(n))
+						kvIndex++
 					case reflect.String:
 						subField.ReflectVal.SetString(localKv.Value)
 						kvIndex++
@@ -214,7 +245,7 @@ func populateODMFields(fields []Field, kvs []KV) error {
 						if subField.ReflectVal.Type().Name() == "Time" {
 							t, err := parseTime(localKv.Value)
 							if err != nil {
-								return err
+								return errors.Wrapf(err, "failed to parse time for key %s", localKv.Key)
 							}
 							subField.ReflectVal.Set(reflect.ValueOf(t))
 							kvIndex++
@@ -235,8 +266,23 @@ func populateODMFields(fields []Field, kvs []KV) error {
 
 		if f.Name == kv.Key {
 			switch f.ReflectVal.Kind() {
+			case reflect.Int:
+				println("parsing int", kv.Value)
+				n, err := strconv.Atoi(kv.Value)
+				if err != nil {
+					return err
+				}
+				f.ReflectVal.SetInt(int64(n))
+				kvIndex++
 			case reflect.String:
 				f.ReflectVal.SetString(kv.Value)
+				kvIndex++
+			case reflect.Float64:
+				n, err := parseFloat(kv.Value)
+				if err != nil {
+					return err
+				}
+				f.ReflectVal.SetFloat(n)
 				kvIndex++
 			case reflect.Slice:
 				for kvs[kvIndex].Key == f.Name {
@@ -247,18 +293,11 @@ func populateODMFields(fields []Field, kvs []KV) error {
 				if f.ReflectVal.Type().Name() == "Time" {
 					t, err := parseTime(kv.Value)
 					if err != nil {
-						return err
+						return errors.Wrapf(err, "failed to parse time for key %s", kv.Key)
 					}
 					f.ReflectVal.Set(reflect.ValueOf(t))
 					kvIndex++
 				}
-			case reflect.Float64:
-				n, err := parseFloat(kv.Value)
-				if err != nil {
-					return err
-				}
-				f.ReflectVal.SetFloat(n)
-				kvIndex++
 			default:
 				return fmt.Errorf("unsupported type %s", f.ReflectVal.Kind())
 			}

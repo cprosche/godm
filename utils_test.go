@@ -1,7 +1,9 @@
 package godm
 
 import (
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -122,4 +124,31 @@ func TestGetODMFields(t *testing.T) {
 		}
 	}
 	assert.True(t, foundComment, "COMMENT field not found")
+}
+
+func TestParseTime(t *testing.T) {
+	t.Run("without Z", func(t *testing.T) {
+		got, err := parseTime("2021-06-03T05:33:00.000")
+		assert.Nil(t, err)
+		assert.Equal(t, time.Date(2021, 6, 3, 5, 33, 0, 0, time.UTC), got)
+	})
+
+	t.Run("with days only", func(t *testing.T) {
+		got, err := parseTime("2020-065T16:00:00")
+		assert.Nil(t, err)
+		assert.Equal(t, time.Date(2020, 3, 5, 16, 0, 0, 0, time.UTC), got)
+	})
+
+	t.Run("too long of decimal", func(t *testing.T) {
+		got, err := parseTime("2020-064T10:34:41.4264")
+		assert.Nil(t, err)
+		assert.Equal(t, time.Date(2020, 3, 4, 10, 34, 41, 426400000, time.UTC), got)
+	})
+}
+
+func TestParseInt(t *testing.T) {
+	expected := 123
+	got, err := strconv.Atoi("0000123")
+	assert.Nil(t, err)
+	assert.Equal(t, expected, got)
 }
